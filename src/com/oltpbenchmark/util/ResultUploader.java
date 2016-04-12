@@ -1,3 +1,19 @@
+/******************************************************************************
+ *  Copyright 2015 by OLTPBenchmark Project                                   *
+ *                                                                            *
+ *  Licensed under the Apache License, Version 2.0 (the "License");           *
+ *  you may not use this file except in compliance with the License.          *
+ *  You may obtain a copy of the License at                                   *
+ *                                                                            *
+ *    http://www.apache.org/licenses/LICENSE-2.0                              *
+ *                                                                            *
+ *  Unless required by applicable law or agreed to in writing, software       *
+ *  distributed under the License is distributed on an "AS IS" BASIS,         *
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  *
+ *  See the License for the specific language governing permissions and       *
+ *  limitations under the License.                                            *
+ ******************************************************************************/
+
 package com.oltpbenchmark.util;
 
 import com.oltpbenchmark.Results;
@@ -46,6 +62,7 @@ public class ResultUploader {
     XMLConfiguration expConf;
     Results results;
     CommandLine argsLine;
+    DBParameterCollector collector;
 
     String dbUrl, dbType;
     String username, password;
@@ -66,14 +83,13 @@ public class ResultUploader {
         windowSize = Integer.parseInt(argsLine.getOptionValue("s"));
         uploadCode = expConf.getString("uploadCode");
         uploadUrl = expConf.getString("uploadUrl");
+
+        this.collector = DBParameterCollectorGen.getCollector(dbType, dbUrl, username, password);
     }
 
     public void writeDBParameters(PrintStream os) {
-        DBParameterCollector collector = DBParameterCollectorGen.getCollector(dbType);
-        Map<String, String> dbConf = collector.collect(dbUrl, username, password);
-        for (Map.Entry<String, String> kv: dbConf.entrySet()) {
-            os.println(kv.getKey().toLowerCase() + "=" + kv.getValue().toLowerCase());
-        }
+        String dbConf = collector.collectParameters();
+        os.print(dbConf);
     }
 
     public void writeBenchmarkConf(PrintStream os) throws ConfigurationException {
@@ -89,6 +105,7 @@ public class ResultUploader {
         Date now = new Date();
         os.println(now.getTime() / 1000L);
         os.println(dbType);
+        os.println(collector.collectVersion());
         os.println(benchType);
         os.println(results.latencyDistribution.toString());
         os.println(results.getRequestsPerSecond());

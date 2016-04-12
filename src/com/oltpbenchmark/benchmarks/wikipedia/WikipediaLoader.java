@@ -1,3 +1,19 @@
+/******************************************************************************
+ *  Copyright 2015 by OLTPBenchmark Project                                   *
+ *                                                                            *
+ *  Licensed under the Apache License, Version 2.0 (the "License");           *
+ *  you may not use this file except in compliance with the License.          *
+ *  You may obtain a copy of the License at                                   *
+ *                                                                            *
+ *    http://www.apache.org/licenses/LICENSE-2.0                              *
+ *                                                                            *
+ *  Unless required by applicable law or agreed to in writing, software       *
+ *  distributed under the License is distributed on an "AS IS" BASIS,         *
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  *
+ *  See the License for the specific language governing permissions and       *
+ *  limitations under the License.                                            *
+ ******************************************************************************/
+
 package com.oltpbenchmark.benchmarks.wikipedia;
 
 import java.io.File;
@@ -108,6 +124,7 @@ public class WikipediaLoader extends Loader {
     private File genTrace() throws Exception {
         WikipediaBenchmark b = (WikipediaBenchmark)this.benchmark;
         File file = b.getTraceOutput();
+        File filedebug = b.getTraceOutputDebug();
         if (file == null || b.getTraceSize() == 0) return (null);
         
         assert(this.num_pages == this.titles.size());
@@ -117,6 +134,7 @@ public class WikipediaLoader extends Loader {
         Zipf z_pages = new Zipf(rng(), 1, this.num_pages, WikipediaConstants.USER_ID_SIGMA);
         
         PrintStream ps = new PrintStream(file);
+        PrintStream psdebug = new PrintStream(filedebug);
         for (int i = 0, cnt = (b.getTraceSize() * 1000); i < cnt; i++) {
             int user_id = -1;
             
@@ -134,10 +152,11 @@ public class WikipediaLoader extends Loader {
             int page_id = z_pages.nextInt();
             Pair<Integer, String> p = this.titles.get(page_id);
             assert(p != null);
-            
             TransactionSelector.writeEntry(ps, user_id, p.first, p.second);
+            TransactionSelector.writeEntryDebug(psdebug, user_id, p.first, p.second, page_id+1);
         } // FOR
         ps.close();
+        psdebug.close();
         return (file);
     }
     
@@ -233,7 +252,7 @@ public class WikipediaLoader extends Loader {
         assert(catalog_tbl != null);
 
         String sql = SQLUtil.getInsertSQL(catalog_tbl);
-        if(this.getDatabaseType() == DatabaseType.ORACLE) {
+        if (this.getDatabaseType() == DatabaseType.ORACLE) {
             // Oracle handles quoted object identifiers differently, do not escape names
             sql = SQLUtil.getInsertSQL(catalog_tbl, false);
         }
@@ -246,13 +265,13 @@ public class WikipediaLoader extends Loader {
         int batchSize = 0;
         int lastPercent = -1;
         for (int i = 1; i <= this.num_pages; i++) {
-            String title = TextGenerator.randomStr(rng(), h_titleLength.nextValue().intValue());
+            // HACK: Always append the page id to the title so that it's guaranteed
+            // to be unique. Otherwise we can get collisions with larger scale factors.
+            int titleLength = h_titleLength.nextValue().intValue();
+            String title = TextGenerator.randomStr(rng(), titleLength) + " [" + i + "]";
             int namespace = h_namespace.nextValue().intValue();
             String restrictions = h_restrictions.nextValue();
-            while (restrictions == "" && this.getDatabaseType() == DatabaseType.ORACLE) {
-                // Oracle handles "" as NULL, get new value
-                restrictions = h_restrictions.nextValue();
-            }
+            assert(restrictions.isEmpty() == false); // Check for Oracle
             double pageRandom = rng().nextDouble();
             String pageTouched = TimeUtil.getCurrentTimeString14();
             
@@ -312,9 +331,13 @@ public class WikipediaLoader extends Loader {
         }
         PreparedStatement watchInsert = this.conn.prepareStatement(sql);
         
-        Zipf h_numWatches = new Zipf(rng(), 0, this.num_pages, WikipediaConstants.NUM_WATCHES_PER_USER_SIGMA);
+        int max_watches_per_user = Math.min(this.num_pages, WikipediaConstants.MAX_WATCHES_PER_USER);
+        Zipf h_numWatches = new Zipf(rng(), 0, max_watches_per_user, WikipediaConstants.NUM_WATCHES_PER_USER_SIGMA);
         Zipf h_pageId = new Zipf(rng(), 1, this.num_pages, WikipediaConstants.WATCHLIST_PAGE_SIGMA);
 
+        // Use a large max batch size for tables with smaller tuples
+        int maxBatchSize = WikipediaConstants.BATCH_SIZE * 5;
+        
         int batchSize = 0;
         int lastPercent = -1;
         Set<Integer> userPages = new HashSet<Integer>();
@@ -322,13 +345,21 @@ public class WikipediaLoader extends Loader {
             int num_watches = h_numWatches.nextInt();
             if (LOG.isTraceEnabled())
                 LOG.trace(user_id + " => " + num_watches);
+            if (num_watches == 0) continue;
             
             userPages.clear();
             for (int i = 0; i < num_watches; i++) {
-                int pageId = h_pageId.nextInt();
-                while (userPages.contains(pageId)) {
+                int pageId = -1;
+                // HACK: Work around for testing with small database sizes
+                if (num_watches == max_watches_per_user) {
+                    pageId = i + 1;
+                } else {
                     pageId = h_pageId.nextInt();
-                } // WHILE
+                    while (userPages.contains(pageId)) {
+                        pageId = h_pageId.nextInt();
+                    } // WHILE
+                }
+                assert(pageId > 0);
                 userPages.add(pageId);
                 
                 Pair<Integer, String> page = this.titles.get(pageId);
@@ -343,7 +374,7 @@ public class WikipediaLoader extends Loader {
                 batchSize++;
             } // FOR
 
-            if (batchSize >= WikipediaConstants.BATCH_SIZE) {
+            if (batchSize >= maxBatchSize) {
                 watchInsert.executeBatch();
                 this.conn.commit();
                 watchInsert.clearBatch();
@@ -356,6 +387,7 @@ public class WikipediaLoader extends Loader {
                 }
             }
         } // FOR
+        
         if (batchSize > 0) {
             watchInsert.executeBatch();
             watchInsert.clearBatch();
@@ -375,7 +407,7 @@ public class WikipediaLoader extends Loader {
         // TEXT
         Table textTable = this.getTableCatalog(WikipediaConstants.TABLENAME_TEXT);
         String textSQL = SQLUtil.getInsertSQL(textTable);
-        if(this.getDatabaseType() == DatabaseType.ORACLE) {
+        if (this.getDatabaseType() == DatabaseType.ORACLE) {
             // Oracle handles quoted object identifiers differently, do not escape names
             textSQL = SQLUtil.getInsertSQL(textTable, false);
         }
@@ -384,7 +416,7 @@ public class WikipediaLoader extends Loader {
         // REVISION
         Table revTable = this.getTableCatalog(WikipediaConstants.TABLENAME_REVISION);
         String revSQL = SQLUtil.getInsertSQL(revTable);
-        if(this.getDatabaseType() == DatabaseType.ORACLE) {
+        if (this.getDatabaseType() == DatabaseType.ORACLE) {
             // Oracle handles quoted object identifiers differently, do not escape names
             revSQL = SQLUtil.getInsertSQL(revTable, false);
         }
@@ -399,6 +431,7 @@ public class WikipediaLoader extends Loader {
         FlatHistogram<Integer> h_nameLength = new FlatHistogram<Integer>(this.rng(), UserHistograms.NAME_LENGTH);
         FlatHistogram<Integer> h_numRevisions = new FlatHistogram<Integer>(this.rng(), PageHistograms.REVISIONS_PER_PAGE);
         
+        final int rev_comment_max = revTable.getColumnByName("rev_comment").getSize();
         int rev_id = 1;
         int lastPercent = -1;
         for (int page_id = 1; page_id <= this.num_pages; page_id++) {
@@ -423,7 +456,10 @@ public class WikipediaLoader extends Loader {
                     old_text_length = old_text.length;
                 }
                 
-                String rev_comment = TextGenerator.randomStr(rng(), h_commentLength.nextValue().intValue()+1);
+                int rev_comment_len = Math.min(rev_comment_max, h_commentLength.nextValue().intValue()+1); // HACK
+                String rev_comment = TextGenerator.randomStr(rng(), rev_comment_len);
+                assert(rev_comment.length() <= rev_comment_max) : 
+                    String.format("[len=%d] ==> %s", rev_comment.length(), rev_comment); 
 
                 // The REV_USER_TEXT field is usually the username, but we'll just 
                 // put in gibberish for now
@@ -455,7 +491,15 @@ public class WikipediaLoader extends Loader {
                 // Update Last Revision Stuff
                 this.page_last_rev_id[page_id-1] = rev_id;
                 this.page_last_rev_length[page_id-1] = old_text_length;
-                rev_id++;
+                rev_id++;  
+                if (this.getDatabaseType() == DatabaseType.ORACLE) {
+                    PreparedStatement text_seq=this.conn.prepareStatement("select text_seq.nextval from dual");
+                    text_seq.execute();
+                    text_seq.close();
+                    PreparedStatement revision_seq=this.conn.prepareStatement("select revision_seq.nextval from dual");
+                    revision_seq.execute();
+                    revision_seq.close();
+                }
                 batchSize++;
             } // FOR (revision)
             if (batchSize > WikipediaConstants.BATCH_SIZE) {

@@ -1,3 +1,19 @@
+/******************************************************************************
+ *  Copyright 2015 by OLTPBenchmark Project                                   *
+ *                                                                            *
+ *  Licensed under the Apache License, Version 2.0 (the "License");           *
+ *  you may not use this file except in compliance with the License.          *
+ *  You may obtain a copy of the License at                                   *
+ *                                                                            *
+ *    http://www.apache.org/licenses/LICENSE-2.0                              *
+ *                                                                            *
+ *  Unless required by applicable law or agreed to in writing, software       *
+ *  distributed under the License is distributed on an "AS IS" BASIS,         *
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  *
+ *  See the License for the specific language governing permissions and       *
+ *  limitations under the License.                                            *
+ ******************************************************************************/
+
 package com.oltpbenchmark.benchmarks.tpcc.procedures;
 
 import java.sql.Connection;
@@ -166,14 +182,9 @@ public class NewOrder extends TPCCProcedure {
 			d_tax = rs.getFloat("D_TAX");
 			rs.close();
 			rs = null;
-			o_id = d_next_o_id;
 
-
-			stmtInsertNewOrder.setInt(1, o_id);
-			stmtInsertNewOrder.setInt(2, d_id);
-			stmtInsertNewOrder.setInt(3, w_id);
-			stmtInsertNewOrder.executeUpdate();
-
+			//woonhak, need to change order because of foreign key constraints
+			//update next_order_id first, but it might doesn't matter
 			stmtUpdateDist.setInt(1, w_id);
 			stmtUpdateDist.setInt(2, d_id);
 			int result = stmtUpdateDist.executeUpdate();
@@ -182,6 +193,10 @@ public class NewOrder extends TPCCProcedure {
 						"Error!! Cannot update next_order_id on district for D_ID="
 								+ d_id + " D_W_ID=" + w_id);
 
+			o_id = d_next_o_id;
+
+			// woonhak, need to change order, because of foreign key constraints
+			//[[insert ooder first
 			stmtInsertOOrder.setInt(1, o_id);
 			stmtInsertOOrder.setInt(2, d_id);
 			stmtInsertOOrder.setInt(3, w_id);
@@ -191,6 +206,27 @@ public class NewOrder extends TPCCProcedure {
 			stmtInsertOOrder.setInt(6, o_ol_cnt);
 			stmtInsertOOrder.setInt(7, o_all_local);
 			stmtInsertOOrder.executeUpdate();
+			//insert ooder first]]
+			/*TODO: add error checking */
+
+			stmtInsertNewOrder.setInt(1, o_id);
+			stmtInsertNewOrder.setInt(2, d_id);
+			stmtInsertNewOrder.setInt(3, w_id);
+			stmtInsertNewOrder.executeUpdate();
+			/*TODO: add error checking */
+
+
+			/* woonhak, [[change order				 
+			stmtInsertOOrder.setInt(1, o_id);
+			stmtInsertOOrder.setInt(2, d_id);
+			stmtInsertOOrder.setInt(3, w_id);
+			stmtInsertOOrder.setInt(4, c_id);
+			stmtInsertOOrder.setTimestamp(5,
+					new Timestamp(System.currentTimeMillis()));
+			stmtInsertOOrder.setInt(6, o_ol_cnt);
+			stmtInsertOOrder.setInt(7, o_all_local);
+			stmtInsertOOrder.executeUpdate();
+			change order]]*/
 
 			for (int ol_number = 1; ol_number <= o_ol_cnt; ol_number++) {
 				ol_supply_w_id = supplierWarehouseIDs[ol_number - 1];
